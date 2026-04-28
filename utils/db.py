@@ -21,7 +21,7 @@ def get_connection():
 def init_db():
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # 1. Create table if it doesn't exist
+            # 1. Users Table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -29,25 +29,35 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
 
-            # 2. THE FIX: Add the balance column to the existing table
-            # This line is safe to run even if the column already exists
-            cur.execute("""
-                ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;
-            """)
-
-            # 3. Create orders table
+            # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT REFERENCES users(user_id),
                     order_code TEXT UNIQUE,
                     description TEXT,
+                    price NUMERIC(10, 2),
+                    region TEXT,
+                    duration TEXT,
                     status TEXT DEFAULT 'pending',
+                    smdp_address TEXT,
+                    activation_code TEXT,
+                    qr_code_file_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            # 🎯 THE HOT-FIX: Automatically patches your live database
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS price NUMERIC(10, 2);")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS smdp_address TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS activation_code TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_code_file_id TEXT;")
 
+            # 3. Transactions Table (Wallet)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
@@ -56,12 +66,38 @@ def init_db():
                 amount NUMERIC(10, 2) NOT NULL,
                 coin_amount VARCHAR(50),
                 currency VARCHAR(10) NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending', -- pending, completed, expired, canceled
+                status VARCHAR(20) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
+            );
+            """)
+            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_url TEXT;")
         conn.commit()
-    print("🚀 Database is synced and tables are ready!")
+    print("🚀 Database is synced, patched, and tables are ready!")
+
+# --- ADD THIS NEW FUNCTION BELOW init_db() ---
+
+def get_user_orders(user_id, offset=0, limit=5):
+    """Fetches a paginated slice of eSIM orders and the total count."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Get the specific 5 items
+            cur.execute(
+                """
+                SELECT status, created_at::DATE, region, duration, order_code
+                FROM orders
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (user_id, limit, offset)
+            )
+            rows = cur.fetchall()
+            
+            # Get the total number of orders for the pagination math
+            cur.execute("SELECT COUNT(*) FROM orders WHERE user_id = %s", (user_id,))
+            total = cur.fetchone()[0]
+            
+            return rows, total
     
     
 def get_user_balance(user_id):
@@ -120,16 +156,16 @@ def deduct_user_balance(user_id, amount):
         conn.commit()        
         
         
-def log_new_transaction(order_id, user_id, amount, coin_amount, currency):
+def log_new_transaction(order_id, user_id, amount, coin_amount, currency,invoice_url):
     """Saves a new pending transaction to the ledger."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO transactions (order_id, user_id, amount, coin_amount, currency, status)
-                VALUES (%s, %s, %s, %s, %s, 'pending')
+                INSERT INTO transactions (order_id, user_id, amount, coin_amount, currency, status,invoice_url)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
                 """,
-                (str(order_id), user_id, amount, str(coin_amount), currency)
+                (str(order_id), user_id, amount, str(coin_amount), currency,invoice_url)
             )
         conn.commit()
 
@@ -208,6 +244,92 @@ def complete_deposit(order_id):
     except Exception as e:
         print(f"🔥 Database Error: {e}")
         return None       
+    
+    
+def check_and_get_pending_order(user_id):
+    """
+    1. Auto-expires anything older than 59 mins.
+    2. Returns any active pending order with the exact seconds remaining.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # 1. THE AUTO-CLEANUP (Updates DB before checking)
+            cur.execute("""
+                UPDATE orders SET status = 'expired' 
+                WHERE user_id = %s AND status = 'pending' AND created_at < NOW() - INTERVAL '59 minutes';
+            """, (user_id,))
+            
+            cur.execute("""
+                UPDATE transactions SET status = 'expired' 
+                WHERE user_id = %s AND status = 'pending' AND created_at < NOW() - INTERVAL '59 minutes';
+            """, (user_id,))
+            conn.commit()
+
+            # 2. CHECK eSIM ORDERS
+            cur.execute("""
+                SELECT 'esim' as type, order_code as id, price as amount, 
+                       EXTRACT(EPOCH FROM (created_at + INTERVAL '59 minutes' - NOW())) as sec_left 
+                FROM orders WHERE user_id = %s AND status = 'pending'
+            """, (user_id,))
+            esim_pending = cur.fetchone()
+            if esim_pending: return esim_pending
+
+            # 3. CHECK WALLET TOP-UPS
+            cur.execute("""
+                SELECT 'wallet' as type, order_id as id, amount, 
+                       EXTRACT(EPOCH FROM (created_at + INTERVAL '59 minutes' - NOW())) as sec_left 
+                FROM transactions WHERE user_id = %s AND status = 'pending'
+            """, (user_id,))
+            wallet_pending = cur.fetchone()
+            
+            return wallet_pending
+
+def force_cancel_order(order_id, order_type):
+    """Triggered when user clicks 'Cancel & Start New'."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if order_type == 'esim':
+                cur.execute("UPDATE orders SET status = 'canceled' WHERE order_code = %s", (str(order_id),))
+            else:
+                cur.execute("UPDATE transactions SET status = 'canceled' WHERE order_id = %s", (str(order_id),))
+        conn.commit()  
+        
+def get_order_by_code(order_code):
+    """Fetches the core details of an order to build the Admin Topic summary."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, price, region, duration, status FROM orders WHERE order_code = %s",
+                (str(order_code),)
+            )
+            return cur.fetchone()
+
+def save_delivery_details(order_code, smdp, activation, qr_id):
+    """Saves the eSIM data from the Wizard and officially marks it as delivered."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE orders 
+                SET smdp_address = %s, 
+                    activation_code = %s, 
+                    qr_code_file_id = %s, 
+                    status = 'delivered'
+                WHERE order_code = %s
+                """,
+                (smdp, activation, qr_id, str(order_code))
+            )
+        conn.commit()
+
+def get_delivery_details(order_code):
+    """Pulls the saved eSIM data when you click 'Edit & Resend'."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT smdp_address, activation_code, qr_code_file_id FROM orders WHERE order_code = %s",
+                (str(order_code),)
+            )
+            return cur.fetchone()          
         
 def close_db():
     """Closes the connection pool gracefully."""

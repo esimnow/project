@@ -5,7 +5,8 @@ from menus.catalog_menus import crypto_menu
 from utils.plisio_api import create_plisio_invoice
 import random
 from handlers.esim_flow import back_to_main
-from utils.db import log_new_transaction,get_transaction_history,cancel_transaction
+from handlers.interceptor import show_interceptor_screen
+from utils.db import log_new_transaction,get_transaction_history,cancel_transaction,check_and_get_pending_order
 
 from handlers.states import (
     DEPOSITING, 
@@ -67,6 +68,15 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = update.effective_user.id
+
+    # 🛡️ THE GATEKEEPER: Check for unpaid orders first
+    pending = check_and_get_pending_order(user_id)
+    if pending:
+        # If found, trap them in the INTERCEPTING state
+        return await show_interceptor_screen(update, context, pending, next_action="topup")
+
+    # If clean, proceed to the normal amount entry
     await query.answer()
     await query.edit_message_text("📝 <b>Top Up</b>\nMinimum: <b>$1.00</b>\nEnter amount (USD):", parse_mode="HTML")
     return ENTERING_AMOUNT
@@ -114,7 +124,7 @@ async def process_crypto_payment(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     if invoice_url:
-        log_new_transaction(order_id, update.effective_user.id, amount, coin_amount, coin)
+        log_new_transaction(order_id, update.effective_user.id, amount, coin_amount, coin,invoice_url)
 
         text = (
             f"✅ <b>Invoice Ready!</b>\n"

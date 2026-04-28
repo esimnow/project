@@ -9,7 +9,7 @@ from telegram.request import HTTPXRequest
 from config import BOT_TOKEN
 from utils.db import init_db, close_db, complete_deposit
 from handlers.start import start
-from handlers.router import purchase_router
+from handlers.router import purchase_router,admin_router
 
 # 1. Setup logging
 logging.basicConfig(
@@ -39,6 +39,7 @@ async def startup_event():
     # Register Handlers
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(purchase_router)
+    telegram_app.add_handler(admin_router)
 
     # Initialize and start the bot in the background
     await telegram_app.initialize()

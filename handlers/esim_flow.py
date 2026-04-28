@@ -3,11 +3,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from menus.catalog_menus import region_menu, plan_menu
 from menus.main_menu import main_menu_keyboard
+from handlers.interceptor import show_interceptor_screen
+from config import PENDING_GROUP_ID
 from utils.db import (
     get_user_balance, 
     is_order_id_unique, 
     create_order_record, 
-    deduct_user_balance
+    deduct_user_balance,
+    check_and_get_pending_order
 )
 
 # 🛑 UNIVERSAL STATE MAP - DO NOT CHANGE NUMBERS
@@ -17,10 +20,22 @@ from utils.db import (
     DEPOSITING, 
     ENTERING_AMOUNT, 
     CHOOSING_COIN, 
-    CONFIRMING_ORDER
-) = range(6)
+    CONFIRMING_ORDER,
+    WAITING_FOR_PAYMENT,
+    INTERCEPTING
+) = range(8)
+
 
 async def handle_buy_esim(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 🛡️ THE GATEKEEPER: Check for unpaid orders first
+    pending = check_and_get_pending_order(user_id)
+    if pending:
+        # If found, trap them in the INTERCEPTING state
+        return await show_interceptor_screen(update, context, pending, next_action="buyesim")
+
+    # If clean, proceed to the normal menu
     await update.message.reply_text(
         "🌍 <b>Select Region</b>\nChoose the area for your eSIM:",
         reply_markup=region_menu(),
@@ -86,6 +101,7 @@ async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="HTML")
     return CONFIRMING_ORDER
 
+
 async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -93,7 +109,6 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     order = context.user_data.get('pending_order')
 
-    # Guardrail: Ensure session hasn't timed out
     if not order:
         await query.edit_message_text("❌ Error: Order session expired. Please start over.")
         return ConversationHandler.END
@@ -109,7 +124,7 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
         )
         deduct_user_balance(user_id, order['price'])
 
-        # 2. The High-End Visual UI
+        # 2. The High-End Visual UI for the User
         success_text = (
             f"🥳 <b>Purchase Successful!</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -119,11 +134,45 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📥 Your eSIM QR code will be sent here in a moment..."
         )
-        
         await query.edit_message_text(success_text, parse_mode="HTML")
+
+        # 🎯 3. THE ADMIN TOPIC GENERATOR
+        if PENDING_GROUP_ID:
+            try:
+                # A. Create the new Topic in the Pending Group
+                topic = await context.bot.create_forum_topic(
+                    chat_id=PENDING_GROUP_ID,
+                    name=f"#{order['order_id']} | {order['region']}"
+                )
+                
+                # B. Build the Work Order Summary
+                admin_text = (
+                    f"🚨 <b>NEW ORDER PENDING</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+                    f"🧾 <b>Order ID:</b> <code>{order['order_id']}</code>\n"
+                    f"📦 <b>Plan:</b> {order['region']} ({order['duration']})\n"
+                    f"💰 <b>Paid:</b> ${order['price']:.2f}\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"<i>Click below to fulfill the eSIM details.</i>"
+                )
+                
+                admin_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🚀 Fulfill Order", callback_data=f"fulfill_{order['order_id']}")
+                ]])
+                
+                # C. Route the message to the specific thread ID
+                await context.bot.send_message(
+                    chat_id=PENDING_GROUP_ID,
+                    message_thread_id=topic.message_thread_id,
+                    text=admin_text,
+                    reply_markup=admin_markup,
+                    parse_mode="HTML"
+                )
+            except Exception as admin_e:
+                print(f"⚠️ Failed to create admin topic: {admin_e}")
         
     except Exception as e:
-        # Log the real error to your VS Code terminal
         print(f"❌ Purchase Error: {e}")
         await query.edit_message_text("⚠️ An error occurred during processing. Please contact support.")
 

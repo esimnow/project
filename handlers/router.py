@@ -15,26 +15,42 @@ from handlers.wallet_flow import (
     show_usdt_networks, back_to_coins,
     handle_cancel_payment
 )
+# 🎯 1. IMPORT THE NEW ORDERS LOGIC
+from handlers.orders_flow import handle_my_orders, handle_orders_pagination
+from handlers.interceptor import handle_interceptor_decision
+from handlers.admin_fulfillment import (
+    start_fulfill, receive_smdp, receive_activation, receive_qr, confirm_delivery, cancel_wizard
+)
+
 from handlers.states import (
     SELECTING_REGION, SELECTING_PLAN, DEPOSITING, 
     ENTERING_AMOUNT, CHOOSING_COIN, CONFIRMING_ORDER, 
-    WAITING_FOR_PAYMENT
+    WAITING_FOR_PAYMENT,INTERCEPTING,
+    ADMIN_SMDP, ADMIN_ACTIVATION, ADMIN_QR, ADMIN_CONFIRM
 )
+
+
 
 async def debug_fallback(update, context):
     query = update.callback_query
-    # Correctly grab the state to see where the user is stuck
     current_state = context.user_data.get('state') 
     print(f"👻 Ignored Click: {query.data} | Bot is in State: {current_state}")
     await query.answer("This button is not active right now.", show_alert=False)
-    return None # None tells the bot to stay in the current room
+    return None 
 
 purchase_router = ConversationHandler(
     entry_points=[
         MessageHandler(filters.Regex("^🌍 Buy eSIM$"), handle_buy_esim),
-        MessageHandler(filters.Regex("^💰 Credits$"), handle_wallet)
+        MessageHandler(filters.Regex("^💰 Credits$"), handle_wallet),
+        
+        # 🎯 2. HOOK UP "MY ORDERS" BUTTON
+        MessageHandler(filters.Regex("^📊 My Orders$"), handle_my_orders),
+        
+        # 🎯 3. HOOK UP PAGINATION CLICKS (Catches clicks even outside of flows)
+        CallbackQueryHandler(handle_orders_pagination, pattern="^orders_page_")
     ],
     states={
+        # ... (Leave all your existing states exactly as they are) ...
         SELECTING_REGION: [
             CallbackQueryHandler(handle_usa_selected, pattern="^region_usa$"),
             CallbackQueryHandler(back_to_main, pattern="^back_to_main$")
@@ -63,10 +79,13 @@ purchase_router = ConversationHandler(
             CallbackQueryHandler(handle_wallet, pattern="^view_wallet$"),
             CallbackQueryHandler(back_to_main, pattern="^back_to_main$")
         ],
-        # 🎯 ROOM 6: LISTEN FOR THE CANCEL BUTTON
         WAITING_FOR_PAYMENT: [
             CallbackQueryHandler(handle_cancel_payment, pattern="^cancel_pay_"),
             CallbackQueryHandler(back_to_main, pattern="^back_to_main$")
+        ],
+        
+        INTERCEPTING: [
+            CallbackQueryHandler(handle_interceptor_decision, pattern="^(resume|forcecancel)_")
         ]
     },
     fallbacks=[
@@ -74,4 +93,33 @@ purchase_router = ConversationHandler(
         CallbackQueryHandler(debug_fallback)
     ],
     allow_reentry=True
+)
+
+admin_router = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(start_fulfill, pattern="^fulfill_"),
+        CallbackQueryHandler(start_fulfill, pattern="^editdelivery_") # Phase 5 entry
+    ],
+    states={
+        ADMIN_SMDP: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_smdp),
+            CallbackQueryHandler(receive_smdp, pattern="^skip_smdp$")
+        ],
+        ADMIN_ACTIVATION: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_activation),
+            CallbackQueryHandler(receive_activation, pattern="^skip_activation$")
+        ],
+        ADMIN_QR: [
+            MessageHandler(filters.PHOTO, receive_qr),
+            CallbackQueryHandler(receive_qr, pattern="^skip_qr$")
+        ],
+        ADMIN_CONFIRM: [
+            CallbackQueryHandler(confirm_delivery, pattern="^confirm_delivery$"),
+            CallbackQueryHandler(start_fulfill, pattern="^fulfill_"), # The 'Edit Details' button loops back to start
+            CallbackQueryHandler(cancel_wizard, pattern="^cancel_wizard$")
+        ]
+    },
+    fallbacks=[CallbackQueryHandler(cancel_wizard, pattern="^cancel_wizard$")],
+    per_chat=True,  # Allows it to work isolated inside specific group topics
+    per_user=True
 )
