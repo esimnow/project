@@ -2,3 +2,5 @@
 dev.ps1
 __pycache__/
 *.pyc
+venv/
+.vscode/
