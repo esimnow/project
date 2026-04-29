@@ -329,8 +329,9 @@ def get_delivery_details(order_code):
                 "SELECT smdp_address, activation_code, qr_code_file_id FROM orders WHERE order_code = %s",
                 (str(order_code),)
             )
-            return cur.fetchone()          
+            return cur.fetchone()     
         
+
 def close_db():
     """Closes the connection pool gracefully."""
     if db_pool:

@@ -2,28 +2,41 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from config import PENDING_GROUP_ID, DELIVERED_GROUP_ID
 from utils.db import save_delivery_details, get_order_by_code
+from utils.pdf_gen import generate_esim_pdf
+import os
 from handlers.states import ADMIN_SMDP, ADMIN_ACTIVATION, ADMIN_QR, ADMIN_CONFIRM
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 async def start_fulfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Step 1: Admin clicks Fulfill inside the Pending Topic"""
     query = update.callback_query
     await query.answer()
     
-    # Extract order_id from callback (e.g., fulfill_90631841)
+    # 🎯 FIX 2: Detect if this is an "Edit" or "First Time"
+    is_edit = query.data.startswith("editdelivery_")
     order_id = query.data.split("_")[1]
     
-    # Initialize the admin's clipboard
     context.user_data['admin_order_id'] = order_id
     context.user_data['admin_delivery'] = {}
+    context.user_data['is_edit_flow'] = is_edit # Save this for later
 
     text = (
-        f"⚙️ **Fulfilling Order #{order_id}**\n\n"
+        f"⚙️ {'🔄 **RE-EDITING**' if is_edit else '**FULFILLING**'} **Order #{order_id}**\n\n"
         f"**Step 1 of 3:**\n"
         f"📝 Please paste the **SM-DP+ Address** below."
     )
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip (Leave Blank)", callback_data="skip_smdp")]])
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip", callback_data="skip_smdp")]])
     
-    await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+    try: await query.delete_message()
+    except: pass
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.effective_message.message_thread_id,
+        text=text,
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
     return ADMIN_SMDP
 
 async def receive_smdp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,10 +93,10 @@ async def receive_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"🔍 **PREVIEW: Delivery for #{order_id}**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"**SM-DP+ Address:** `{delivery['smdp']}`\n"
-        f"**Activation Code:** `{delivery['activation']}`\n"
-        f"**QR Included:** {'✅ Yes' if delivery['qr_file_id'] else '❌ No'}\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"**SM-DP+ Address:** `{delivery['smdp']}`\n\n"
+        f"**Activation Code:** `{delivery['activation']}`\n\n"
+        f"**QR Included:** {'✅ Yes' if delivery['qr_file_id'] else '❌ No'}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ *Please review carefully before sending to the user.*"
     )
@@ -98,69 +111,78 @@ async def receive_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_CONFIRM
 
 async def confirm_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Final Step: Executes DB save, notifies user, and relocates the topic."""
+    print(f"DEBUG: Updating order {order_id} to delivered")
     query = update.callback_query
     await query.answer()
     
     order_id = context.user_data['admin_order_id']
     delivery = context.user_data['admin_delivery']
+    is_edit = context.user_data.get('is_edit_flow', False)
     current_thread_id = update.effective_message.message_thread_id
     
     # 1. Update Database
     save_delivery_details(order_id, delivery['smdp'], delivery['activation'], delivery['qr_file_id'])
     user_id, price, region, duration, status = get_order_by_code(order_id)
 
-    # 2. Send to User
-    # 📌 NOTE: You can replace this block later with your custom PDF generation!
-    user_text = (
-        f"📦 **Your eSIM for {region} has arrived!**\n\n"
-        f"**Order ID:** `#{order_id}`\n"
-        f"**SM-DP+ Address:** `{delivery['smdp']}`\n"
-        f"**Activation Code:** `{delivery['activation']}`\n\n"
-        f"Thank you for choosing us! Need help? Contact Support."
-    )
+    await query.edit_message_text("🛠️ **Processing PDF & Delivery...**", parse_mode="Markdown")
     
+    qr_temp_path = None
+    pdf_path = None
+
     try:
-        if delivery['qr_file_id']:
-            await context.bot.send_photo(chat_id=user_id, photo=delivery['qr_file_id'], caption=user_text, parse_mode="Markdown")
+        # 2. Handle File Downloads
+        if delivery.get('qr_file_id'):
+            qr_temp_path = os.path.join(BASE_DIR, f"temp_qr_{order_id}.jpg")
+            new_file = await context.bot.get_file(delivery['qr_file_id'])
+            await new_file.download_to_drive(qr_temp_path)
+
+        # 3. Generate the PDF
+        pdf_path = generate_esim_pdf(order_id, region, delivery['smdp'], delivery['activation'], qr_path=qr_temp_path)
+
+        # 4. Send to User
+        with open(pdf_path, 'rb') as pdf_file:
+            caption = f"📦 **Update: Your eSIM for {region} is ready!**" if is_edit else f"📦 **Your eSIM for {region} is ready!**"
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=pdf_file,
+                filename=f"eSIM_Order_{order_id}.pdf",
+                caption=caption
+            )
+            
+        # 🎯 FIX 3: THE RELOCATION LOGIC
+        # If this was an EDIT, we don't move anything. We just update the summary in the current topic.
+        if is_edit:
+            await query.edit_message_text(f"✅ **Update Sent!** User has received the new PDF.")
         else:
-            await context.bot.send_message(chat_id=user_id, text=user_text, parse_mode="Markdown")
-    except Exception as e:
-        await query.message.reply_text(f"⚠️ Failed to DM user {user_id}. They might have blocked the bot.")
-
-    # 3. Relocate to Delivered Group
-    try:
-        # A. Create new topic in the Delivered group
-        new_topic = await context.bot.create_forum_topic(
-            chat_id=DELIVERED_GROUP_ID,
-            name=f"✅ #{order_id} | {region}"
+            # If it's NEW, move from Pending -> Delivered
+            new_topic = await context.bot.create_forum_topic(chat_id=DELIVERED_GROUP_ID, name=f"✅ #{order_id} | {region}")
+            
+            admin_receipt = (
+                f"✅ **ORDER DELIVERED**\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"👤 **User ID:** `{user_id}`\n\n"
+                f"🧾 **Order ID:** `#{order_id}`\n\n"
+                f"SM-DP+: `{delivery['smdp']}`\n\n"
+                f"Activation: `{delivery['activation']}`\n\n"
+                f"━━━━━━━━━━━━━━━━━━"
         )
-        
-        # B. Post the receipt there with the Phase 5 Edit button
-        admin_receipt = (
-            f"✅ **ORDER DELIVERED**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"👤 **User ID:** `{user_id}`\n"
-            f"🧾 **Order ID:** `#{order_id}`\n"
-            f"SM-DP+: `{delivery['smdp']}`\n"
-            f"Activation: `{delivery['activation']}`\n"
-            f"━━━━━━━━━━━━━━━━━━"
-        )
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Edit & Resend", callback_data=f"editdelivery_{order_id}")]])
-        
-        if delivery['qr_file_id']:
-            await context.bot.send_photo(chat_id=DELIVERED_GROUP_ID, message_thread_id=new_topic.message_thread_id, photo=delivery['qr_file_id'], caption=admin_receipt, reply_markup=markup, parse_mode="Markdown")
-        else:
-            await context.bot.send_message(chat_id=DELIVERED_GROUP_ID, message_thread_id=new_topic.message_thread_id, text=admin_receipt, reply_markup=markup, parse_mode="Markdown")
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Edit & Resend", callback_data=f"editdelivery_{order_id}")]])
+            
+            with open(pdf_path, 'rb') as pdf_file:
+                await context.bot.send_document(chat_id=DELIVERED_GROUP_ID, message_thread_id=new_topic.message_thread_id, document=pdf_file, caption=admin_receipt, reply_markup=markup)
 
-        # C. Delete the old topic from the Pending group to keep it clean
-        await context.bot.delete_forum_topic(chat_id=PENDING_GROUP_ID, message_thread_id=current_thread_id)
+            # Only delete the topic if it's currently in the PENDING group
+            await context.bot.delete_forum_topic(chat_id=PENDING_GROUP_ID, message_thread_id=current_thread_id)
 
     except Exception as e:
-        print(f"Topic Relocation Error: {e}")
-        await query.edit_message_text(f"✅ Delivered to user, but failed to move topic: {e}")
+        print(f"Error: {e}")
+        await query.message.reply_text(f"⚠️ Error: {e}")
+    finally:
+        if pdf_path and os.path.exists(pdf_path): os.remove(pdf_path)
+        if qr_temp_path and os.path.exists(qr_temp_path): os.remove(qr_temp_path)
 
     return ConversationHandler.END
+
 
 async def cancel_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Aborts the admin input process."""
