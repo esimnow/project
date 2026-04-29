@@ -11,3 +11,4 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 PENDING_GROUP_ID = int(os.getenv("PENDING_GROUP_ID")) if os.getenv("PENDING_GROUP_ID") else None
 DELIVERED_GROUP_ID = int(os.getenv("DELIVERED_GROUP_ID")) if os.getenv("DELIVERED_GROUP_ID") else None
+PAYMENT_ALERTS_GROUP_ID = int(os.getenv("PAYMENT_ALERTS_GROUP_ID")) if os.getenv("PAYMENT_ALERTS_GROUP_ID") else None

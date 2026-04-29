@@ -30,6 +30,7 @@ def init_db():
                 );
             """)
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_topic_id BIGINT;")
 
             # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
             cur.execute("""
@@ -71,10 +72,27 @@ def init_db():
             );
             """)
             cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_url TEXT;")
+            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';")
         conn.commit()
     print("🚀 Database is synced, patched, and tables are ready!")
 
 # --- ADD THIS NEW FUNCTION BELOW init_db() ---
+
+
+def get_user_payment_topic(user_id):
+    """Retrieves the existing topic ID for a user if it exists."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payment_topic_id FROM users WHERE user_id = %s", (user_id,))
+            result = cur.fetchone()
+            return result[0] if result else None
+
+def set_user_payment_topic(user_id, topic_id):
+    """Saves the created topic ID to the user's record."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET payment_topic_id = %s WHERE user_id = %s", (topic_id, user_id))
+        conn.commit()
 
 def get_user_orders(user_id, offset=0, limit=5):
     """Fetches a paginated slice of eSIM orders and the total count."""
@@ -196,54 +214,52 @@ def cancel_transaction(order_id):
         conn.commit()          
         
 
-def complete_deposit(order_id):
+def handle_payment_status(order_id, plisio_status):
     """
-    Updates the database and returns data for the Telegram notification.
-    Uses psycopg (PostgreSQL) with context managers for safety.
+    Credits user exactly once and returns instructions for alerts.
+    Returns: (should_alert, user_id, amount)
     """
     try:
-        # 1. Open Connection (Automatic close)
-        with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
-            # 2. Open Cursor (Automatic close)
-            with conn.cursor() as cur:
-                
-                # Fetch transaction details
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT user_id, amount, status FROM transactions WHERE order_id = %s",
                     (str(order_id),)
                 )
                 row = cur.fetchone()
 
-                # Guardrail: Check if order exists or is already done
-                if not row:
-                    print(f"❌ Order {order_id} not found.")
-                    return None
+                if not row: return False, None, None
                 
-                if row['status'] == 'completed':
-                    print(f"⚠️ Order {order_id} already processed.")
-                    return None
+                db_status = row['status']
+                user_id = row['user_id']
+                amount = float(row['amount'])
 
-                # 3. Perform the Updates
-                # Add money to user's balance
-                cur.execute(
-                    "UPDATE users SET balance = balance + %s WHERE user_id = %s",
-                    (row['amount'], row['user_id'])
-                )
-                
-                # Mark the transaction as completed
-                cur.execute(
-                    "UPDATE transactions SET status = 'completed' WHERE order_id = %s",
-                    (str(order_id),)
-                )
-                
-                # Psycopg 3 commits automatically when leaving the 'with' block 
-                # if no errors occurred.
-                print(f"💰 SUCCESS: ${row['amount']} added to User {row['user_id']}")
-                return row['user_id'], row['amount']
+                # 🚀 Detect and Credit on Mempool
+                if plisio_status == 'mempool' and db_status == 'pending':
+                    cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
+                    cur.execute("UPDATE transactions SET status = 'mempool_credited' WHERE order_id = %s", (str(order_id),))
+                    conn.commit()
+                    return True, user_id, amount
 
+                # 🏁 Finalize on Completed
+                elif plisio_status == 'completed':
+                    if db_status == 'mempool_credited':
+                        # Already credited! Silence the alert.
+                        cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
+                        conn.commit()
+                        return False, None, None
+                    
+                    elif db_status == 'pending':
+                        # Missed mempool? Credit now.
+                        cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
+                        cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
+                        conn.commit()
+                        return True, user_id, amount
+
+                return False, None, None
     except Exception as e:
-        print(f"🔥 Database Error: {e}")
-        return None       
+        print(f"🔥 DB Logic Error: {e}")
+        return False, None, None
     
     
 def check_and_get_pending_order(user_id):
