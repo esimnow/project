@@ -66,20 +66,20 @@ async def plisio_webhook(request: Request):
         order_id = form_data.get("order_number")
         status = form_data.get("status")
 
-        # 🎯 1. Process via the Guarded DB Logic
-        should_alert, user_id, amount = handle_payment_status(order_id, status)
+        # 🎯 1. Receive the new data from the DB
+        should_alert, user_id, amount, currency, coin_amount = handle_payment_status(order_id, status)
 
         if should_alert and telegram_app:
-            # --- USER ALERT ---
-            user_text = "⚡ <b>Payment Detected!</b>\nAdded to balance. Click 💰 <b>Credits</b> menu to check balance."
+            
+            # --- 🎯 THE NEW USER ALERT ---
+            user_text = f"⚡ <b>Payment Detected!</b>\n<b>${amount:.2f}</b> Added to balance. Click 💰 <b>Credits</b> menu to check balance."
             await telegram_app.bot.send_message(chat_id=user_id, text=user_text, parse_mode="HTML")
 
-            # --- ADMIN ALERT (ONE TOPIC PER USER) ---
+            # --- ADMIN ALERT ---
             if PAYMENT_ALERTS_GROUP_ID:
                 topic_id = get_user_payment_topic(user_id)
                 
                 if not topic_id:
-                    # Create a new permanent topic for this specific user
                     user_info = await telegram_app.bot.get_chat(user_id)
                     title = f"👤 {user_info.username or user_id}"
                     
@@ -90,12 +90,14 @@ async def plisio_webhook(request: Request):
                     topic_id = topic.message_thread_id
                     set_user_payment_topic(user_id, topic_id)
 
+                # --- 🎯 THE NEW ADMIN ALERT ---
                 admin_text = (
                     f"💰 <b>DEPOSIT DETECTED</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"👤 <b>User:</b> <code>{user_id}</code>\n"
                     f"🧾 <b>Order:</b> <code>#{order_id}</code>\n"
                     f"💵 <b>Amount:</b> ${amount:.2f}\n"
+                    f"🪙 <b>Amount in {currency}:</b> <code>{coin_amount}</code>\n"
                     f"━━━━━━━━━━━━━━━━━━"
                 )
                 await telegram_app.bot.send_message(
@@ -107,7 +109,8 @@ async def plisio_webhook(request: Request):
 
     except Exception as e:
         print("❌ WEBHOOK CRASHED:")
-        traceback.print_exc() # This will show you EXACTLY why it failed in your console
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
     return {"status": "ok"}

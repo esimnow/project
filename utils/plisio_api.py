@@ -1,13 +1,9 @@
 import httpx
 from config import PLISIO_API_KEY
 
-# Base URLs
 CREATE_URL = "https://plisio.net/api/v1/invoices/new"
-DETAIL_URL = "https://plisio.net/api/v1/operations/{}"
 
 async def create_plisio_invoice(amount, currency, order_id, user_id):
-    # Mapping to ensure USDT uses the correct Plisio CID (e.g. USDT_TRC20)
-    # If the user chose USDT, we must tell Plisio which network.
     coin_id = currency.upper() 
     if coin_id == "USDT": 
         coin_id = "USDT_TRC20"
@@ -20,8 +16,6 @@ async def create_plisio_invoice(amount, currency, order_id, user_id):
         'source_amount': str(amount),
         'source_currency': 'USD',
         'email': f"user_{user_id}@bot.com",
-        # 🎯 THE MAGIC PARAMETER: This forces Plisio to ONLY show this coin
-        # and skips the selection gallery entirely.
         'allowed_psys_cids': coin_id, 
         'plugin': 'telegram_bot_v1',
     }
@@ -32,18 +26,10 @@ async def create_plisio_invoice(amount, currency, order_id, user_id):
             create_data = response.json()
             
             if create_data.get('status') == 'success':
-                txn_id = create_data['data']['txn_id']
-                # With allowed_psys_cids set, this URL goes straight to the QR code
                 invoice_url = create_data['data']['invoice_url']
-
-                # Step 2: Get details for the coin_amount
-                detail_res = await client.get(
-                    DETAIL_URL.format(txn_id), 
-                    params={'api_key': PLISIO_API_KEY}, 
-                    timeout=10
-                )
-                detail_data = detail_res.json()
-                coin_amount = detail_data['data'].get('amount', "Check Link") if detail_data.get('status') == 'success' else "Check Link"
+                
+                # 🎯 THE FIX: Plisio includes the exact crypto amount in this first response
+                coin_amount = create_data['data'].get('amount', 'Check Link')
 
                 return invoice_url, coin_amount
             

@@ -217,13 +217,13 @@ def cancel_transaction(order_id):
 def handle_payment_status(order_id, plisio_status):
     """
     Credits user exactly once and returns instructions for alerts.
-    Returns: (should_alert, user_id, amount)
+    Returns: (should_alert, user_id, amount, currency, coin_amount)
     """
     try:
         with get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
-                    "SELECT user_id, amount, status FROM transactions WHERE order_id = %s",
+                    "SELECT user_id, amount, currency, coin_amount, status FROM transactions WHERE order_id = %s",
                     (str(order_id),)
                 )
                 row = cur.fetchone()
@@ -233,13 +233,15 @@ def handle_payment_status(order_id, plisio_status):
                 db_status = row['status']
                 user_id = row['user_id']
                 amount = float(row['amount'])
+                currency = row['currency']
+                coin_amount = row['coin_amount']
 
                 # 🚀 Detect and Credit on Mempool
                 if plisio_status == 'mempool' and db_status == 'pending':
                     cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
                     cur.execute("UPDATE transactions SET status = 'mempool_credited' WHERE order_id = %s", (str(order_id),))
                     conn.commit()
-                    return True, user_id, amount
+                    return True, user_id, amount,currency, coin_amount
 
                 # 🏁 Finalize on Completed
                 elif plisio_status == 'completed':
@@ -247,19 +249,19 @@ def handle_payment_status(order_id, plisio_status):
                         # Already credited! Silence the alert.
                         cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
                         conn.commit()
-                        return False, None, None
+                        return False, None, None, None , None
                     
                     elif db_status == 'pending':
                         # Missed mempool? Credit now.
                         cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
                         cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
                         conn.commit()
-                        return True, user_id, amount
+                        return True, user_id, amount, currency, coin_amount
 
-                return False, None, None
+                return False, None, None, None,None
     except Exception as e:
         print(f"🔥 DB Logic Error: {e}")
-        return False, None, None
+        return False, None, None,None,None
     
     
 def check_and_get_pending_order(user_id):
