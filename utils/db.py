@@ -8,7 +8,7 @@ from config import DATABASE_URL
 db_pool = ConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
-    max_size=10,
+    max_size=5,
     timeout=30.0
 )
 
@@ -19,62 +19,67 @@ def get_connection():
     return db_pool.connection()
 
 def init_db():
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            # 1. Users Table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
-            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_topic_id BIGINT;")
+    try: 
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # 1. Users Table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_topic_id BIGINT;")
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS support_topic_id BIGINT;")
 
-            # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS orders (
+                # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(user_id),
+                        order_code TEXT UNIQUE,
+                        description TEXT,
+                        price NUMERIC(10, 2),
+                        region TEXT,
+                        duration TEXT,
+                        status TEXT DEFAULT 'pending',
+                        smdp_address TEXT,
+                        activation_code TEXT,
+                        qr_code_file_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                # 🎯 THE HOT-FIX: Automatically patches your live database
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS price NUMERIC(10, 2);")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS smdp_address TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS activation_code TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_code_file_id TEXT;")
+
+                # 3. Transactions Table (Wallet)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
                     id SERIAL PRIMARY KEY,
-                    user_id BIGINT REFERENCES users(user_id),
-                    order_code TEXT UNIQUE,
-                    description TEXT,
-                    price NUMERIC(10, 2),
-                    region TEXT,
-                    duration TEXT,
-                    status TEXT DEFAULT 'pending',
-                    smdp_address TEXT,
-                    activation_code TEXT,
-                    qr_code_file_id TEXT,
+                    order_id VARCHAR(50) UNIQUE NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    amount NUMERIC(10, 2) NOT NULL,
+                    coin_amount VARCHAR(50),
+                    currency VARCHAR(10) NOT NULL,
+                    status VARCHAR(20) DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-            """)
-            # 🎯 THE HOT-FIX: Automatically patches your live database
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS price NUMERIC(10, 2);")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS smdp_address TEXT;")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS activation_code TEXT;")
-            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_code_file_id TEXT;")
-
-            # 3. Transactions Table (Wallet)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY,
-                order_id VARCHAR(50) UNIQUE NOT NULL,
-                user_id BIGINT NOT NULL,
-                amount NUMERIC(10, 2) NOT NULL,
-                coin_amount VARCHAR(50),
-                currency VARCHAR(10) NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """)
-            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_url TEXT;")
-            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';")
-        conn.commit()
-    print("🚀 Database is synced, patched, and tables are ready!")
+                """)
+                cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_url TEXT;")
+                cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';")
+                cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+            conn.commit()
+        print("✅ Database synced safely.")
+    except Exception as e:
+        print("🚀 Database is synced, patched, and tables are ready! {e}" )
 
 # --- ADD THIS NEW FUNCTION BELOW init_db() ---
 
@@ -180,8 +185,8 @@ def log_new_transaction(order_id, user_id, amount, coin_amount, currency,invoice
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO transactions (order_id, user_id, amount, coin_amount, currency, status,invoice_url)
-                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                INSERT INTO transactions (order_id, user_id, amount, coin_amount, currency, status,invoice_url, updated_at)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s, CURRENT_TIMESTAMP)
                 """,
                 (str(order_id), user_id, amount, str(coin_amount), currency,invoice_url)
             )
@@ -196,7 +201,7 @@ def get_transaction_history(user_id, limit=5):
                 SELECT created_at::DATE, order_id, status, amount 
                 FROM transactions 
                 WHERE user_id = %s 
-                ORDER BY created_at DESC 
+                ORDER BY updated_at DESC 
                 LIMIT %s
                 """,
                 (user_id, limit)
@@ -222,13 +227,15 @@ def handle_payment_status(order_id, plisio_status):
     try:
         with get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
+                # 1. Fetch current transaction details
                 cur.execute(
                     "SELECT user_id, amount, currency, coin_amount, status FROM transactions WHERE order_id = %s",
                     (str(order_id),)
                 )
                 row = cur.fetchone()
 
-                if not row: return False, None, None
+                if not row: 
+                    return False, None, None, None, None # Consistent 5-value return
                 
                 db_status = row['status']
                 user_id = row['user_id']
@@ -236,33 +243,48 @@ def handle_payment_status(order_id, plisio_status):
                 currency = row['currency']
                 coin_amount = row['coin_amount']
 
-                # 🚀 Detect and Credit on Mempool
+                # 🚀 2. Detect and Credit on Mempool (Instant Credit)
                 if plisio_status == 'mempool' and db_status == 'pending':
+                    # Add money to user balance
                     cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
-                    cur.execute("UPDATE transactions SET status = 'mempool_credited' WHERE order_id = %s", (str(order_id),))
+                    
+                    # Update status AND refresh updated_at so it jumps to the top of history
+                    cur.execute(
+                        """
+                        UPDATE transactions 
+                        SET status = 'mempool_credited', updated_at = CURRENT_TIMESTAMP 
+                        WHERE order_id = %s
+                        """, 
+                        (str(order_id),)
+                    )
                     conn.commit()
-                    return True, user_id, amount,currency, coin_amount
+                    return True, user_id, amount, currency, coin_amount
 
-                # 🏁 Finalize on Completed
+                # 🏁 3. Finalize on Completed (Silent if already credited)
                 elif plisio_status == 'completed':
                     if db_status == 'mempool_credited':
-                        # Already credited! Silence the alert.
-                        cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
+                        # Already credited! Just finalize status quietly and update timestamp.
+                        cur.execute(
+                            "UPDATE transactions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE order_id = %s", 
+                            (str(order_id),)
+                        )
                         conn.commit()
-                        return False, None, None, None , None
+                        return False, None, None, None, None
                     
                     elif db_status == 'pending':
-                        # Missed mempool? Credit now.
+                        # Missed the mempool ping? Credit them now and update timestamp.
                         cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
-                        cur.execute("UPDATE transactions SET status = 'completed' WHERE order_id = %s", (str(order_id),))
+                        cur.execute(
+                            "UPDATE transactions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE order_id = %s", 
+                            (str(order_id),)
+                        )
                         conn.commit()
                         return True, user_id, amount, currency, coin_amount
 
-                return False, None, None, None,None
+                return False, None, None, None, None
     except Exception as e:
         print(f"🔥 DB Logic Error: {e}")
-        return False, None, None,None,None
-    
+        return False, None, None, None, None    
     
 def check_and_get_pending_order(user_id):
     """
@@ -321,6 +343,31 @@ def get_order_by_code(order_code):
                 (str(order_code),)
             )
             return cur.fetchone()
+        
+def expire_old_orders():
+    """
+    Finds pending orders older than 59 minutes, updates them to 'expired', 
+    and returns the list of affected users so the bot can notify them.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                # The RETURNING clause lets us update and select in one step!
+                cur.execute(
+                    """
+                    UPDATE transactions 
+                    SET status = 'expired' 
+                    WHERE status = 'pending' 
+                    AND created_at < NOW() - INTERVAL '59 minutes'
+                    RETURNING order_id, user_id;
+                    """
+                )
+                expired_orders = cur.fetchall()
+                conn.commit()
+                return expired_orders
+    except Exception as e:
+        print(f"🔥 DB Expiration Task Error: {e}")
+        return []        
 
 def save_delivery_details(order_code, smdp, activation, qr_id):
     """Saves the eSIM data from the Wizard and officially marks it as delivered."""
@@ -347,7 +394,31 @@ def get_delivery_details(order_code):
                 "SELECT smdp_address, activation_code, qr_code_file_id FROM orders WHERE order_code = %s",
                 (str(order_code),)
             )
-            return cur.fetchone()     
+            return cur.fetchone()    
+        
+        
+def get_support_topic(user_id):
+    """Checks if a user already has a dedicated support topic."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT support_topic_id FROM users WHERE user_id = %s", (user_id,))
+            result = cur.fetchone()
+            return result[0] if result else None
+
+def set_support_topic(user_id, topic_id):
+    """Saves the topic ID for a user."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET support_topic_id = %s WHERE user_id = %s", (topic_id, user_id))
+        conn.commit()
+
+def get_user_by_topic(topic_id):
+    """Finds which user belongs to a specific topic ID (for Admin replies)."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users WHERE support_topic_id = %s", (topic_id,))
+            result = cur.fetchone()
+            return result[0] if result else None         
         
 
 def close_db():

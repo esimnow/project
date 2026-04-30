@@ -26,10 +26,12 @@ async def create_plisio_invoice(amount, currency, order_id, user_id):
             create_data = response.json()
             
             if create_data.get('status') == 'success':
-                invoice_url = create_data['data']['invoice_url']
+                data = create_data['data']
+                invoice_url = data.get('invoice_url')
                 
-                # 🎯 THE FIX: Plisio includes the exact crypto amount in this first response
-                coin_amount = create_data['data'].get('amount', 'Check Link')
+                # 🎯 THE FIX: When using USD conversion, Plisio puts the crypto amount 
+                # inside 'invoice_total_sum'. We check for both just to be 100% safe.
+                coin_amount = data.get('invoice_total_sum') or data.get('amount') or "Check Link"
 
                 return invoice_url, coin_amount
             

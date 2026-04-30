@@ -37,7 +37,7 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         for row in history:
             date, oid, status, amt = row
-            status_icon = "✅" if status == 'completed' else "⏳" if status == 'pending' else "❌"
+            status_icon = "✅" if status == ['completed', 'mempool_credited'] else "⏳" if status == 'pending' else "❌"
             history_text += f"• {date} | {oid} | {status_icon} ${amt:.2f}\n"
 
     text = (
@@ -92,7 +92,7 @@ async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ENTERING_AMOUNT
 
     context.user_data['deposit_amount'] = amount
-    await update.message.reply_text(f"✅ <b>Set:</b> ${amount:.2f}\nSelect payment method:", reply_markup=crypto_menu(), parse_mode="HTML")
+    await update.message.reply_text(f"✅ <b>Amount You Entered is :</b> ${amount:.2f}\nSelect your cryptocurrency for payment:", reply_markup=crypto_menu(), parse_mode="HTML")
     return CHOOSING_COIN
 
 
@@ -173,9 +173,9 @@ async def show_usdt_networks(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = (
         f"🟢 <b>Select USDT Network</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Your Deposit:</b> ${amount:.2f}\n\n"
+        f"💰 <b>Your Entered Deposit:</b> ${amount:.2f}\n\n"
         f"⚠️ <b>Network Rules:</b>\n"
-        f"• <b>TRC-20 (Tron):</b> $1.00 Minimum\n"
+        f"• <b>TRC-20 (Tron):</b> $6.00 Minimum\n"
         f"• <b>ERC-20 (Ethereum):</b> $12.00 Minimum\n"
         f"━━━━━━━━━━━━━━━━━━"
     )

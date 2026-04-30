@@ -4,13 +4,15 @@ import asyncio
 from fastapi import FastAPI, Request, BackgroundTasks
 import uvicorn
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram import BotCommand 
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters,ContextTypes
 from telegram.request import HTTPXRequest 
 
 from config import BOT_TOKEN,PAYMENT_ALERTS_GROUP_ID
 from utils.db import (
     init_db, close_db, handle_payment_status, 
-    get_user_payment_topic, set_user_payment_topic
+    get_user_payment_topic, set_user_payment_topic,
+    expire_old_orders
 )
 from handlers.start import start
 from handlers.router import purchase_router,admin_router
@@ -25,6 +27,39 @@ logging.basicConfig(
 app = FastAPI()
 telegram_app = None
 
+async def post_init(application):
+    await application.bot.set_my_commands([
+        BotCommand("start", "🏠 Return to Main Menu")
+    ])
+    
+    
+async def check_expirations(context: ContextTypes.DEFAULT_TYPE):
+    """Background task that runs every 30 mins to clean up dead invoices."""
+    expired_list = expire_old_orders()
+    
+    if expired_list:
+        print(f"🧹 Cleaned up {len(expired_list)} expired orders.")
+        
+    for order in expired_list:
+        try:
+            user_id = order['user_id']
+            order_id = order['order_id']
+            
+            # The updated formatted text
+            text = (
+                f"<b>⚠️ Invoice Expired</b>\n\n"
+                f"🚨 <i>Your deposit order <code>#{order_id}</code> has been cancelled because the 59-minute payment window closed.</i>\n\n"
+                f"To try again, please click 💰 <b>Credits</b> to generate a new invoice."
+            )
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="HTML" # 🎯 Make sure this is set to HTML!
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to send expiration notice to {user_id}: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     """This runs when the server starts"""
@@ -37,6 +72,7 @@ async def startup_event():
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .request(request_config)
+        .post_init(post_init)
         .build()
     )
 
@@ -47,6 +83,7 @@ async def startup_event():
 
     # Initialize and start the bot in the background
     await telegram_app.initialize()
+    telegram_app.job_queue.run_repeating(check_expirations, interval=1800, first=10)
     await telegram_app.updater.start_polling()
     await telegram_app.start()
     print("🚀 Bot & FastAPI are live on Railway!")

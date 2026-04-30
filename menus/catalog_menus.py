@@ -38,17 +38,17 @@ def deposit_menu():
 
 def crypto_menu():
     keyboard = [
-        [InlineKeyboardButton("🟠 BTC", callback_data="pay_btc"), 
+        [InlineKeyboardButton("₿ BTC", callback_data="pay_btc"), 
          InlineKeyboardButton("💎 TON", callback_data="pay_ton")],
          
-        [InlineKeyboardButton("🟣 SOL", callback_data="pay_sol"), 
+        [InlineKeyboardButton("◎ SOL", callback_data="pay_sol"), 
          # 👇 CHANGED: Now triggers the sub-menu instead of direct payment
-         InlineKeyboardButton("🟢 USDT", callback_data="show_usdt_networks")], 
+         InlineKeyboardButton("₮ USDT", callback_data="show_usdt_networks")], 
          
-        [InlineKeyboardButton("⚪ LTC", callback_data="pay_ltc"), 
-         InlineKeyboardButton("🔵 ETH", callback_data="pay_eth")],
+        [InlineKeyboardButton("Ł LTC", callback_data="pay_ltc"), 
+         InlineKeyboardButton("Ξ ETH", callback_data="pay_eth")],
          
-        [InlineKeyboardButton("🔴 TRON", callback_data="pay_trx"), 
+        [InlineKeyboardButton("🔗 TRON", callback_data="pay_trx"), 
          InlineKeyboardButton("⬅️ Back", callback_data="start_topup")]
     ]
     return InlineKeyboardMarkup(keyboard)

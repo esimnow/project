@@ -22,6 +22,8 @@ from handlers.admin_fulfillment import (
     start_fulfill, receive_smdp, receive_activation, receive_qr, confirm_delivery, cancel_wizard
 )
 
+from handlers.support import handle_support_click
+
 from handlers.states import (
     SELECTING_REGION, SELECTING_PLAN, DEPOSITING, 
     ENTERING_AMOUNT, CHOOSING_COIN, CONFIRMING_ORDER, 
@@ -45,6 +47,8 @@ purchase_router = ConversationHandler(
         
         # 🎯 2. HOOK UP "MY ORDERS" BUTTON
         MessageHandler(filters.Regex("^📊 My Orders$"), handle_my_orders),
+        
+        MessageHandler(filters.Regex("^🛠️ Support$"), handle_support_click),
         
         # 🎯 3. HOOK UP PAGINATION CLICKS (Catches clicks even outside of flows)
         CallbackQueryHandler(handle_orders_pagination, pattern="^orders_page_")

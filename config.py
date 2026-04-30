@@ -12,3 +12,6 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 PENDING_GROUP_ID = int(os.getenv("PENDING_GROUP_ID")) if os.getenv("PENDING_GROUP_ID") else None
 DELIVERED_GROUP_ID = int(os.getenv("DELIVERED_GROUP_ID")) if os.getenv("DELIVERED_GROUP_ID") else None
 PAYMENT_ALERTS_GROUP_ID = int(os.getenv("PAYMENT_ALERTS_GROUP_ID")) if os.getenv("PAYMENT_ALERTS_GROUP_ID") else None
+SUPPORT_BOT_TOKEN = os.getenv("SUPPORT_BOT_TOKEN")
+SUPPORT_GROUP_ID = int(os.getenv("SUPPORT_GROUP_ID")) if os.getenv("SUPPORT_GROUP_ID") else None
+SUPPORT_BOT_URL = os.getenv("SUPPORT_BOT_URL")
