@@ -59,6 +59,7 @@ def init_db():
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS smdp_address TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS activation_code TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_code_file_id TEXT;")
+                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_renewable BOOLEAN DEFAULT FALSE;")
 
                 # 3. Transactions Table (Wallet)
                 cur.execute("""
@@ -154,17 +155,17 @@ def is_order_id_unique(order_id):
             # If exists is None, the ID is unique (True)
             return exists is None     
         
-def create_order_record(order_code, user_id, price, region, duration):
+def create_order_record(order_code, user_id, price, region, duration,is_renewable):
     """Inserts the finalized order with all details into the DB."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             # This order MUST match the SQL command above
             cur.execute(
                 """
-                INSERT INTO orders (order_code, user_id, price, region, duration, status) 
-                VALUES (%s, %s, %s, %s, %s, 'completed')
+                INSERT INTO orders (order_code, user_id, price, region, duration, is_renewable, status) 
+                VALUES (%s, %s, %s, %s, %s, %s,'completed')
                 """,
-                (str(order_code), user_id, price, region, duration)
+                (str(order_code), user_id, price, region, duration,is_renewable)
             )
         conn.commit()
 

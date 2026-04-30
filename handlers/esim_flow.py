@@ -13,7 +13,7 @@ from utils.db import (
     check_and_get_pending_order
 )
 
-# 🛑 UNIVERSAL STATE MAP - DO NOT CHANGE NUMBERS
+# 🛑 UNIVERSAL STATE MAP - MATCHING YOUR CODE
 (
     SELECTING_REGION, 
     SELECTING_PLAN, 
@@ -22,20 +22,16 @@ from utils.db import (
     CHOOSING_COIN, 
     CONFIRMING_ORDER,
     WAITING_FOR_PAYMENT,
-    INTERCEPTING
-) = range(8)
-
+    INTERCEPTING,
+    SELECT_RENEWAL_TYPE
+) = range(9)
 
 async def handle_buy_esim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    # 🛡️ THE GATEKEEPER: Check for unpaid orders first
     pending = check_and_get_pending_order(user_id)
     if pending:
-        # If found, trap them in the INTERCEPTING state
         return await show_interceptor_screen(update, context, pending, next_action="buyesim")
 
-    # If clean, proceed to the normal menu
     await update.message.reply_text(
         "🌍 <b>Select Region</b>\nChoose the area for your eSIM:",
         reply_markup=region_menu(),
@@ -44,10 +40,46 @@ async def handle_buy_esim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECTING_REGION
 
 async def handle_usa_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User clicked the 'region_usa' button"""
     query = update.callback_query
     await query.answer()
+    
+    context.user_data['selected_region'] = 'usa'
+    
+    text = (
+        "<b>🇺🇸 USA eSIM Configuration</b>\n\n"
+        "Please choose your plan type:\n\n"
+        "• <b>🔄 Renewable:</b> Can be Renewed / extended Once Expired.\n"
+        "• <b>🚫 Non-Renewable:</b> Cannot Renew eSIM Once Plans End.\n\n"
+        "<i>💰 Note: Renewable plans have an additional $2.00 fee.</i>"
+    )
+    
     await query.edit_message_text(
-        "🇺🇸 <b>USA eSIM Plans</b>\nSelect your duration:",
+        text=text,
+        reply_markup=renewal_type_keyboard(),
+        parse_mode="HTML"
+    )
+    return SELECT_RENEWAL_TYPE
+
+def renewal_type_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Renewable (+$2)", callback_data="renewal_true"),
+            InlineKeyboardButton("🚫 Non-Renewable", callback_data="renewal_false")
+        ],
+        [InlineKeyboardButton("⬅️ Back to Regions", callback_data="back_to_regions")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def handle_renewal_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Save the renewal choice
+    context.user_data['is_renewable'] = (query.data == "renewal_true")
+    
+    await query.edit_message_text(
+        text="📅 <b>Select Plan Duration:</b>\n\nChoose your preferred time period:",
         reply_markup=plan_menu(),
         parse_mode="HTML"
     )
@@ -59,6 +91,10 @@ async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     balance = get_user_balance(user_id) or 0.0
     
+    # 🎯 Get renewal status for fee calculation
+    is_renewable = context.user_data.get('is_renewable', False)
+    renewal_fee = 2.00 if is_renewable else 0.00
+    
     plan_data = {
         "plan_1m": {"price": 10.00, "name": "1 Month"},
         "plan_2m": {"price": 18.00, "name": "2 Months"},
@@ -68,7 +104,8 @@ async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYP
     }
     
     selected = plan_data.get(query.data, plan_data["plan_1m"])
-    price = selected["price"]
+    # 🎯 Add the $2 fee if applicable
+    total_price = selected["price"] + renewal_fee
     duration = selected["name"]
 
     while True:
@@ -76,31 +113,36 @@ async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYP
         if is_order_id_unique(order_id): break
     
     context.user_data['pending_order'] = {
-        'order_id': order_id, 'price': price, 'region': "USA", 'duration': duration
+        'order_id': order_id, 
+        'price': total_price, 
+        'region': "USA", 
+        'duration': duration,
+        'is_renewable': is_renewable
     }
 
+    renewal_label = "🔄 Renewable" if is_renewable else "🚫 Non-Renewable"
     summary_text = (
         f"📋 <b>Order Summary</b>\n━━━━━━━━━━━━━━━━━━\n"
         f"<b>Order ID:</b> <code>{order_id}</code>\n"
         f"📍 <b>Region:</b> USA\n"
+        f"⚙️ <b>Type:</b> {renewal_label}\n"
         f"⏱️ <b>Duration:</b> {duration}\n"
-        f"💰 <b>Price:</b> ${price:.2f}\n"
+        f"💰 <b>Total Price:</b> ${total_price:.2f}\n"
         f"💵 <b>Your Balance:</b> ${balance:.2f}\n━━━━━━━━━━━━━━━━━━\n"
     )
 
-    if balance >= price:
+    if balance >= total_price:
         summary_text += "<b>Confirm this purchase?</b>"
         btns = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_final"),
                  InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
     else:
-        top_up_amount = price - balance
+        top_up_amount = total_price - balance
         summary_text += f"❗ <b>Top up:</b> ${top_up_amount:.2f}\n\n<b>Insufficient funds.</b>"
         btns = [[InlineKeyboardButton("💎 Top Up", callback_data="view_wallet"),
                  InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
 
     await query.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="HTML")
     return CONFIRMING_ORDER
-
 
 async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -114,44 +156,47 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     try:
-        # 1. Execute Database Transactions
+        # 🎯 1. Save to DB with Renewable Boolean
         create_order_record(
             order['order_id'], 
             user_id, 
             order['price'], 
             order['region'], 
-            order['duration']
+            order['duration'],
+            order['is_renewable'] # Ensure your DB function handles this!
         )
         deduct_user_balance(user_id, order['price'])
 
-        # 2. The High-End Visual UI for the User
+        renewal_status = "🔄 RENEWABLE" if order['is_renewable'] else "🚫 NON-RENEWABLE"
+
+        # 2. User Success UI
         success_text = (
             f"🥳 <b>Purchase Successful!</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🧾 <b>Order ID:</b> <code>{order['order_id']}</code>\n"
             f"📦 <b>Item:</b> {order['region']} ({order['duration']})\n"
+            f"⚙️ <b>Type:</b> {renewal_status}\n"
             f"💰 <b>Paid:</b> ${order['price']:.2f}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📥 Your eSIM QR code will be sent here in a moment..."
         )
         await query.edit_message_text(success_text, parse_mode="HTML")
 
-        # 🎯 3. THE ADMIN TOPIC GENERATOR
+        # 🎯 3. ADMIN ALERT WITH RENEWAL INFO
         if PENDING_GROUP_ID:
             try:
-                # A. Create the new Topic in the Pending Group
                 topic = await context.bot.create_forum_topic(
                     chat_id=PENDING_GROUP_ID,
-                    name=f"#{order['order_id']} | {order['region']}"
+                    name=f"#{order['order_id']} | {renewal_status}"
                 )
                 
-                # B. Build the Work Order Summary
                 admin_text = (
                     f"🚨 <b>NEW ORDER PENDING</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
                     f"🧾 <b>Order ID:</b> <code>{order['order_id']}</code>\n"
                     f"📦 <b>Plan:</b> {order['region']} ({order['duration']})\n"
+                    f"⚙️ <b>Type:</b> {renewal_status}\n"
                     f"💰 <b>Paid:</b> ${order['price']:.2f}\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"<i>Click below to fulfill the eSIM details.</i>"
@@ -161,7 +206,6 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
                     InlineKeyboardButton("🚀 Fulfill Order", callback_data=f"fulfill_{order['order_id']}")
                 ]])
                 
-                # C. Route the message to the specific thread ID
                 await context.bot.send_message(
                     chat_id=PENDING_GROUP_ID,
                     message_thread_id=topic.message_thread_id,
@@ -170,11 +214,11 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
                     parse_mode="HTML"
                 )
             except Exception as admin_e:
-                print(f"⚠️ Failed to create admin topic: {admin_e}")
+                print(f"⚠️ Admin Alert Error: {admin_e}")
         
     except Exception as e:
         print(f"❌ Purchase Error: {e}")
-        await query.edit_message_text("⚠️ An error occurred during processing. Please contact support.")
+        await query.edit_message_text("⚠️ Processing error. Contact support.")
 
     return ConversationHandler.END
 

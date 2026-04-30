@@ -6,7 +6,9 @@ from telegram.ext import (
     CallbackQueryHandler
 )
 from handlers.esim_flow import (
-    handle_buy_esim, handle_usa_selected, handle_plan_selected, handle_final_purchase, back_to_main,
+    handle_buy_esim, handle_usa_selected, 
+    handle_plan_selected, handle_final_purchase, back_to_main,
+    handle_renewal_selection,
     SELECTING_REGION, SELECTING_PLAN, CONFIRMING_ORDER
 )
 from handlers.wallet_flow import (
@@ -28,7 +30,7 @@ from handlers.states import (
     SELECTING_REGION, SELECTING_PLAN, DEPOSITING, 
     ENTERING_AMOUNT, CHOOSING_COIN, CONFIRMING_ORDER, 
     WAITING_FOR_PAYMENT,INTERCEPTING,
-    ADMIN_SMDP, ADMIN_ACTIVATION, ADMIN_QR, ADMIN_CONFIRM
+    ADMIN_SMDP, ADMIN_ACTIVATION, ADMIN_QR, ADMIN_CONFIRM,SELECT_RENEWAL_TYPE
 )
 
 
@@ -63,6 +65,12 @@ purchase_router = ConversationHandler(
             CallbackQueryHandler(handle_plan_selected, pattern="^plan_"),
             CallbackQueryHandler(handle_buy_esim, pattern="^back_to_regions$")
         ],
+        
+        SELECT_RENEWAL_TYPE: [
+            CallbackQueryHandler(handle_renewal_selection, pattern="^renewal_"),
+            CallbackQueryHandler(handle_renewal_selection, pattern="^back_to_regions$")
+        ],
+        
         DEPOSITING: [
             CallbackQueryHandler(start_topup, pattern="^start_topup$"),
             CallbackQueryHandler(back_to_main, pattern="^back_to_main$")
