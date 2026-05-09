@@ -33,6 +33,7 @@ def init_db():
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_topic_id BIGINT;")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS support_topic_id BIGINT;")
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_activated BOOLEAN DEFAULT FALSE;")
 
                 # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
                 cur.execute("""
@@ -107,7 +108,7 @@ def get_user_orders(user_id, offset=0, limit=5):
             # Get the specific 5 items
             cur.execute(
                 """
-                SELECT status, created_at::DATE, region, duration, order_code
+                SELECT status, created_at::DATE, region, duration, order_code, is_renewable
                 FROM orders
                 WHERE user_id = %s
                 ORDER BY created_at DESC
@@ -279,6 +280,7 @@ def handle_payment_status(order_id, plisio_status):
                             "UPDATE transactions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE order_id = %s", 
                             (str(order_id),)
                         )
+                        cur.execute("UPDATE users SET is_activated = TRUE WHERE user_id = %s", (user_id,))
                         conn.commit()
                         return True, user_id, amount, currency, coin_amount
 
@@ -286,6 +288,14 @@ def handle_payment_status(order_id, plisio_status):
     except Exception as e:
         print(f"🔥 DB Logic Error: {e}")
         return False, None, None, None, None    
+
+def is_user_activated(user_id):
+    """Checks if the user has ever completed a deposit."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT is_activated FROM users WHERE user_id = %s", (user_id,))
+            result = cur.fetchone()
+            return result[0] if result else False    
     
 def check_and_get_pending_order(user_id):
     """

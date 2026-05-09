@@ -41,11 +41,12 @@ async def display_orders_page(update: Update, context: ContextTypes.DEFAULT_TYPE
         }
         
         for row in orders:
-            status, date, region, duration, order_code = row
+            status, date, region, duration, order_code,is_renewable = row
             emoji_status = status_emojis.get(status.lower(), f"🔵 {status}")
+            renewal_label = "RenW." if is_renewable else "NonR"
             
             # Format: 🟢 Completed | 2026-04-27 | USA 10GB | #90631841
-            text += f"{emoji_status} | {date} | {region} {duration} | #{order_code}\n\n"
+            text += f"{emoji_status} | {date} | {region} {duration} | {renewal_label} | #{order_code}\n\n"
         
         # Build the Pagination Buttons
         buttons = []

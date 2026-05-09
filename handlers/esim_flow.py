@@ -4,13 +4,14 @@ from telegram.ext import ContextTypes, ConversationHandler
 from menus.catalog_menus import region_menu, plan_menu
 from menus.main_menu import main_menu_keyboard
 from handlers.interceptor import show_interceptor_screen
-from config import PENDING_GROUP_ID
+from config import PENDING_GROUP_ID,CHECK_ACTIVATION
 from utils.db import (
     get_user_balance, 
     is_order_id_unique, 
     create_order_record, 
     deduct_user_balance,
-    check_and_get_pending_order
+    check_and_get_pending_order,
+    is_user_activated
 )
 
 # 🛑 UNIVERSAL STATE MAP - MATCHING YOUR CODE
@@ -26,11 +27,40 @@ from utils.db import (
     SELECT_RENEWAL_TYPE
 ) = range(9)
 
+
+USA_PLANS = {
+    "plan_1m": {"name": "1 Month",  "price": 18.99},
+    "plan_2m": {"name": "2 Months", "price": 37.99},
+    "plan_3m": {"name": "3 Months", "price": 57.99},
+    "plan_4m": {"name": "4 Months", "price": 75.99},
+    "plan_5m": {"name": "5 Months", "price": 94.99},
+    "plan_6m": {"name": "6 Months", "price": 114.99},
+    "plan_1y": {"name": "1 Year",   "price": 227.99}
+}
+
 async def handle_buy_esim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     pending = check_and_get_pending_order(user_id)
     if pending:
         return await show_interceptor_screen(update, context, pending, next_action="buyesim")
+    
+    # 🎯 2. NEW: Check if user is activated (has ever topped up)
+    if CHECK_ACTIVATION and not is_user_activated(user_id):
+        text = (
+            "👋 <b>First-Time Activation Required</b>\n\n"
+            "To activate your account, please make your first deposit of at least <b>$6.00</b>.\n\n"
+            "✨ <b>Why?</b>\n"
+            "This is a one-time requirement to verify your account. "
+            "The money will be <b>added to your balance</b> immediately and can be used to buy any eSIM!\n\n"
+            "<i>Note: Once you top up once, you will never see this message again.</i>"
+        )
+        btns = [[
+            InlineKeyboardButton("💎 Activate & Top Up Now", callback_data="view_wallet"),
+        ]]
+        
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="HTML")
+        # We don't return SELECTING_REGION here, so they stay on this screen
+        return ConversationHandler.END
 
     await update.message.reply_text(
         "🌍 <b>Select Region</b>\nChoose the area for your eSIM:",
@@ -85,29 +115,28 @@ async def handle_renewal_selection(update: Update, context: ContextTypes.DEFAULT
     )
     return SELECTING_PLAN
 
+
 async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
     balance = get_user_balance(user_id) or 0.0
-    
-    # 🎯 Get renewal status for fee calculation
+
+    # 🎯 1. Calculate the $2.00 Renewable Fee
     is_renewable = context.user_data.get('is_renewable', False)
     renewal_fee = 2.00 if is_renewable else 0.00
     
-    plan_data = {
-        "plan_1m": {"price": 10.00, "name": "1 Month"},
-        "plan_2m": {"price": 18.00, "name": "2 Months"},
-        "plan_3m": {"price": 25.00, "name": "3 Months"},
-        "plan_6m": {"price": 45.00, "name": "6 Months"},
-        "plan_1y": {"price": 80.00, "name": "1 Year"}
-    }
+    plan_key = query.data 
     
-    selected = plan_data.get(query.data, plan_data["plan_1m"])
-    # 🎯 Add the $2 fee if applicable
-    total_price = selected["price"] + renewal_fee
-    duration = selected["name"]
+    # 🎯 2. Get the plan details (Fixes KeyError: 'price')
+    plan = USA_PLANS.get(plan_key, USA_PLANS["plan_1m"])
+    
+    # 🎯 3. Calculate the Total Price
+    base_price = plan["price"]
+    total_price = base_price + renewal_fee
+    duration = plan["name"]
 
+    # Generate unique Order ID
     while True:
         order_id = random.randint(10000000, 99999999)
         if is_order_id_unique(order_id): break
@@ -120,26 +149,33 @@ async def handle_plan_selected(update: Update, context: ContextTypes.DEFAULT_TYP
         'is_renewable': is_renewable
     }
 
-    renewal_label = "🔄 Renewable" if is_renewable else "🚫 Non-Renewable"
+    # Visual Labels
+    type_label = "Renewable." if is_renewable else "NonRenewable."
+    type_icon = "🔄" if is_renewable else "🚫"
+
+    # 🗺️ THE VISUAL ORDER MAP
     summary_text = (
-        f"📋 <b>Order Summary</b>\n━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Order ID:</b> <code>{order_id}</code>\n"
-        f"📍 <b>Region:</b> USA\n"
-        f"⚙️ <b>Type:</b> {renewal_label}\n"
-        f"⏱️ <b>Duration:</b> {duration}\n"
-        f"💰 <b>Total Price:</b> ${total_price:.2f}\n"
-        f"💵 <b>Your Balance:</b> ${balance:.2f}\n━━━━━━━━━━━━━━━━━━\n"
+        f"🗺️ <b>Order Confirmation</b>\n"
+        f"<code>┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</code>\n"
+        f"<code>┃ ID    : #{order_id:<18}┃</code>\n"
+        f"<code>┃ Region   : USA               ┃</code>\n"
+        f"<code>┃ Type  : {type_icon} {type_label:<18}┃</code>\n"
+        f"<code>┃ Duration : {duration:<18}┃</code>\n"
+        f"<code>┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛</code>\n\n"
+        f"💰 <b>Total Due:</b> ${total_price:.2f}\n\n"
+        f"💳 <b>Wallet Balance:</b> ${balance:.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
     )
 
     if balance >= total_price:
-        summary_text += "<b>Confirm this purchase?</b>"
-        btns = [[InlineKeyboardButton("✅ Confirm", callback_data="confirm_final"),
-                 InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
+        summary_text += "✨ <b>Ready to activate?</b>"
+        btns = [[InlineKeyboardButton("✅ Confirm Purchase", callback_data="confirm_final")],
+                [InlineKeyboardButton("⬅️ Change Plan", callback_data="back_to_regions")]]
     else:
-        top_up_amount = total_price - balance
-        summary_text += f"❗ <b>Top up:</b> ${top_up_amount:.2f}\n\n<b>Insufficient funds.</b>"
-        btns = [[InlineKeyboardButton("💎 Top Up", callback_data="view_wallet"),
-                 InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
+        diff = total_price - balance
+        summary_text += f"⚠️ <b>Shortfall:</b> ${diff:.2f}\n<i>Insufficient funds.</i>"
+        btns = [[InlineKeyboardButton("💎 Quick Top Up", callback_data="view_wallet")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="back_to_main")]]
 
     await query.edit_message_text(summary_text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="HTML")
     return CONFIRMING_ORDER
@@ -178,7 +214,8 @@ async def handle_final_purchase(update: Update, context: ContextTypes.DEFAULT_TY
             f"⚙️ <b>Type:</b> {renewal_status}\n"
             f"💰 <b>Paid:</b> ${order['price']:.2f}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📥 Your eSIM QR code will be sent here in a moment..."
+            f"📥 Your eSIM QR code will be sent here in 1-2 hours\n\n"
+            f"📥 <b>Do Not Reach Out To Support Until 24 Hours And Esim Did Not Arrive\n</b>"
         )
         await query.edit_message_text(success_text, parse_mode="HTML")
 

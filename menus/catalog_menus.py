@@ -17,8 +17,16 @@ def plan_menu():
         ],
         [
             InlineKeyboardButton("3 Months", callback_data="plan_3m"),
+            InlineKeyboardButton("4 Months", callback_data="plan_4m")
+        ],
+        
+        [
+            InlineKeyboardButton("5 Months", callback_data="plan_5m"),
             InlineKeyboardButton("6 Months", callback_data="plan_6m")
         ],
+        
+        
+        
         [InlineKeyboardButton("1 Year", callback_data="plan_1y")],
         [InlineKeyboardButton("⬅️ Back to Regions", callback_data="back_to_regions")]
     ]

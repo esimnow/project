@@ -78,14 +78,14 @@ async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If clean, proceed to the normal amount entry
     await query.answer()
-    await query.edit_message_text("📝 <b>Top Up</b>\nMinimum: <b>$1.00</b>\nEnter amount (USD):", parse_mode="HTML")
+    await query.edit_message_text("📝 <b>Top Up</b>\nMinimum: <b>$6.00</b>\nEnter amount (USD):", parse_mode="HTML")
     return ENTERING_AMOUNT
 
 async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text)
-        if amount < 1:
-            await update.message.reply_text("❌ Minimum deposit is $4.")
+        if amount < 6.0:
+            await update.message.reply_text("❌ Minimum deposit is $6.")
             return ENTERING_AMOUNT
     except ValueError:
         await update.message.reply_text("❌ Enter a valid number.")
@@ -114,7 +114,7 @@ async def process_crypto_payment(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     
     order_id = random.randint(10000000, 99999999)
-    await query.edit_message_text(f"🔄 <b>Generating {coin} Invoice...</b>", parse_mode="HTML")
+    await query.edit_message_text(f"🔄 <b>Generating {coin} Invoice... Please Wait</b>", parse_mode="HTML")
 
     invoice_url, coin_amount = await create_plisio_invoice(
         amount, 
@@ -168,7 +168,12 @@ async def show_usdt_networks(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     
-    amount = context.user_data.get('deposit_amount', 1.0)
+    amount = context.user_data.get('deposit_amount')
+    
+    # 🎯 SAFETY CHECK: If amount is missing, stop the flow
+    if amount is None:
+        await query.answer("⚠️ Session expired. Please enter the amount again.", show_alert=True)
+        return ConversationHandler.END
     
     text = (
         f"🟢 <b>Select USDT Network</b>\n"
@@ -193,7 +198,12 @@ async def back_to_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Returns the user to the main crypto selection menu."""
     query = update.callback_query
     await query.answer()
-    amount = context.user_data.get('deposit_amount', 1.0)
+    amount = context.user_data.get('deposit_amount')
+    
+    # 🎯 SAFETY CHECK: If amount is missing, stop the flow
+    if amount is None:
+        await query.answer("⚠️ Session expired. Please enter the amount again.", show_alert=True)
+        return ConversationHandler.END
     
     await query.edit_message_text(
         f"✅ <b>Amount Set:</b> ${amount:.2f}\n\nSelect your cryptocurrency for payment:",

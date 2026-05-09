@@ -10,6 +10,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # We use <b> for bold and <code> for that 'copyable' look on the ID
     welcome_text = (
         f"👋 <b>Welcome to the eSIM Store User {user.id}, Get high-speed digital SIMs instantly. </b>\n\n"
+        f"<i>Pay Using Crypto Currency Anonymously</i>\n\n"
         
         f"Choose an option from the menu below to start."
     )

@@ -111,12 +111,14 @@ async def receive_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_CONFIRM
 
 async def confirm_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    order_id = context.user_data['admin_order_id']
     print(f"DEBUG: Updating order {order_id} to delivered")
     query = update.callback_query
     await query.answer()
     
-    order_id = context.user_data['admin_order_id']
-    delivery = context.user_data['admin_delivery']
+   
+    delivery = context.user_data.get('admin_delivery')
     is_edit = context.user_data.get('is_edit_flow', False)
     current_thread_id = update.effective_message.message_thread_id
     
