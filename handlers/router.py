@@ -52,9 +52,10 @@ purchase_router = ConversationHandler(
         
         MessageHandler(filters.Regex("^🛠️ Support$"), handle_support_click),
         
+        CallbackQueryHandler(handle_wallet, pattern="^view_wallet$"),
+        
         # 🎯 3. HOOK UP PAGINATION CLICKS (Catches clicks even outside of flows)
         CallbackQueryHandler(handle_orders_pagination, pattern="^orders_page_"),
-        CallbackQueryHandler(start_topup, pattern="^view_wallet$")
     ],
     states={
         # ... (Leave all your existing states exactly as they are) ...

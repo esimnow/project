@@ -78,7 +78,7 @@ async def start_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If clean, proceed to the normal amount entry
     await query.answer()
-    await query.edit_message_text("📝 <b>Top Up</b>\nMinimum: <b>$6.00</b>\nEnter amount (USD):", parse_mode="HTML")
+    await query.edit_message_text("📝 <b>Top Up</b>\n\n Minimum: <b>$6.00</b>\nEnter amount (USD):", parse_mode="HTML")
     return ENTERING_AMOUNT
 
 async def receive_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):

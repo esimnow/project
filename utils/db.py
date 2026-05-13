@@ -18,30 +18,36 @@ def get_connection():
     """Borrow a connection from the pool"""
     return db_pool.connection()
 
+# utils/db.py
+
 def init_db():
     try: 
         with get_connection() as conn:
             with conn.cursor() as cur:
-                # 1. Users Table
+                # 1. USERS TABLE
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         user_id BIGINT PRIMARY KEY,
                         username TEXT,
+                        balance DECIMAL(10, 2) DEFAULT 0.0,
+                        payment_topic_id BIGINT,
+                        support_topic_id BIGINT,
+                        is_activated BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                # Patches for existing users
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10, 2) DEFAULT 0.0;")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_topic_id BIGINT;")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS support_topic_id BIGINT;")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_activated BOOLEAN DEFAULT FALSE;")
 
-                # 2. Orders Table (WITH THE MISSING COLUMNS ADDED)
+                # 2. ORDERS TABLE
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS orders (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT REFERENCES users(user_id),
                         order_code TEXT UNIQUE,
-                        description TEXT,
                         price NUMERIC(10, 2),
                         region TEXT,
                         duration TEXT,
@@ -49,39 +55,41 @@ def init_db():
                         smdp_address TEXT,
                         activation_code TEXT,
                         qr_code_file_id TEXT,
+                        is_renewable BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
-                # 🎯 THE HOT-FIX: Automatically patches your live database
+                # Patches for existing users (No Duplicates)
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS price NUMERIC(10, 2);")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;")
-                cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS smdp_address TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS activation_code TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_code_file_id TEXT;")
                 cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_renewable BOOLEAN DEFAULT FALSE;")
 
-                # 3. Transactions Table (Wallet)
+                # 3. TRANSACTIONS TABLE
                 cur.execute("""
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(50) UNIQUE NOT NULL,
-                    user_id BIGINT NOT NULL,
-                    amount NUMERIC(10, 2) NOT NULL,
-                    coin_amount VARCHAR(50),
-                    currency VARCHAR(10) NOT NULL,
-                    status VARCHAR(20) DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id SERIAL PRIMARY KEY,
+                        order_id VARCHAR(50) UNIQUE NOT NULL,
+                        user_id BIGINT NOT NULL,
+                        amount NUMERIC(10, 2) NOT NULL,
+                        coin_amount VARCHAR(50),
+                        currency VARCHAR(10) NOT NULL,
+                        status VARCHAR(20) DEFAULT 'pending',
+                        invoice_url TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
                 """)
                 cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_url TEXT;")
-                cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';")
                 cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
             conn.commit()
-        print("✅ Database synced safely.")
+        print("✅ Database logic is fully synced and patched.")
     except Exception as e:
-        print("🚀 Database is synced, patched, and tables are ready! {e}" )
+        print(f"❌ Database Init Error: {e}")
 
 # --- ADD THIS NEW FUNCTION BELOW init_db() ---
 
